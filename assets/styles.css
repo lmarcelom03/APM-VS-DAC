@@ -1,0 +1,33 @@
+/* Header ribbon */
+.header-ribbon {
+  background: linear-gradient(90deg,#E53935,#8B0000 60%, #222 100%);
+  color: #E6F1FF;
+  padding: 12px 16px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(229,57,53,0.35);
+}
+
+/* KPI Cards */
+.kpi-card {
+  background: rgba(17,24,39,0.8);
+  border: 1px solid rgba(229,57,53,0.35);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+
+.kpi-value {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.kpi-label {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+/* Make tabs look pill-like */
+[data-baseweb="tab-list"] {
+  background: transparent !important;
+}
