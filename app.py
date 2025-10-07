@@ -30,6 +30,9 @@ def load_default():
     return apm_gen, dac_gen, apm_cc, dac_cc
 
 
+EXCLUDED_CC_LABELS = {"0016-DE (PROMOCION)"}
+
+
 def normalize_cc_labels(df: pd.DataFrame, column: str) -> pd.DataFrame:
     """Apply known fixes to cost center labels so dashboards stay consistent."""
     replacements = {
@@ -37,6 +40,15 @@ def normalize_cc_labels(df: pd.DataFrame, column: str) -> pd.DataFrame:
     }
     df[column] = df[column].replace(replacements)
     return df
+
+
+def remove_excluded_cc(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Drop rows whose cost center label is explicitly excluded."""
+    if df is None or df.empty:
+        return df
+    if column not in df.columns:
+        return df
+    return df[~df[column].isin(EXCLUDED_CC_LABELS)].copy()
 
 
 def split_total_rows(df: pd.DataFrame, label_col: str):
@@ -203,6 +215,8 @@ apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
 dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
 apm_cc = normalize_cc_labels(apm_cc, "CC_T")
 dac_cc = normalize_cc_labels(dac_cc, "CC_T")
+apm_cc = remove_excluded_cc(apm_cc, "CC_T")
+dac_cc = remove_excluded_cc(dac_cc, "CC_T")
 apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
@@ -217,6 +231,9 @@ dac_cp_gen_breakdown = estimate_cp_generica_distribution(
 )
 if not dac_cp_gen_breakdown.empty:
     dac_cp_gen_breakdown["Monto"] = dac_cp_gen_breakdown["Monto"].round(2)
+
+apm_cp_gen_breakdown = remove_excluded_cc(apm_cp_gen_breakdown, "CP")
+dac_cp_gen_breakdown = remove_excluded_cc(dac_cp_gen_breakdown, "CP")
 
 cp_breakdown_quality = "estimado"
 
@@ -348,10 +365,12 @@ if uploaded is not None:
         apm_cc = apmgg2.dropna(subset=['CC_T'])[['CC_T','Total_APM']].dropna()
         apm_cc['Total_APM'] = apm_cc['Total_APM'].round(2)
         apm_cc = normalize_cc_labels(apm_cc, "CC_T")
+        apm_cc = remove_excluded_cc(apm_cc, "CC_T")
         apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 
         apm_detail_base = apmgg2.dropna(subset=['CC_T']).copy()
         apm_detail_base = normalize_cc_labels(apm_detail_base, "CC_T")
+        apm_detail_base = remove_excluded_cc(apm_detail_base, "CC_T")
         detail_cols_apm = [
             c
             for c in apm_detail_base.columns
@@ -367,6 +386,7 @@ if uploaded is not None:
         apm_detail_long, _ = split_total_rows(apm_detail_long, 'Genérica')
         apm_cp_gen_breakdown = apm_detail_long.rename(columns={'CC_T': 'CP', 'Monto': 'Monto'})
         apm_cp_gen_breakdown['Monto'] = apm_cp_gen_breakdown['Monto'].round(2)
+        apm_cp_gen_breakdown = remove_excluded_cc(apm_cp_gen_breakdown, "CP")
 
         da = xl.parse("Res_DA")
         header_idx_da = 3
@@ -385,10 +405,12 @@ if uploaded is not None:
         dac_cc = da2.dropna(subset=['CC_T'])[['CC_T', total_col_da]].rename(columns={total_col_da:'Total_DAC'}).dropna()
         dac_cc['Total_DAC'] = dac_cc['Total_DAC'].round(2)
         dac_cc = normalize_cc_labels(dac_cc, "CC_T")
+        dac_cc = remove_excluded_cc(dac_cc, "CC_T")
         dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
         dac_detail_base = da2.dropna(subset=['CC_T']).copy()
         dac_detail_base = normalize_cc_labels(dac_detail_base, "CC_T")
+        dac_detail_base = remove_excluded_cc(dac_detail_base, "CC_T")
         detail_cols_dac = [c for c in gen_cols_da if 'TOTAL' not in c.upper()]
         dac_detail_long = dac_detail_base[['CC_T'] + detail_cols_dac].melt(
             id_vars='CC_T', value_vars=detail_cols_dac, var_name='Genérica', value_name='Monto'
@@ -398,6 +420,7 @@ if uploaded is not None:
         dac_detail_long, _ = split_total_rows(dac_detail_long, 'Genérica')
         dac_cp_gen_breakdown = dac_detail_long.rename(columns={'CC_T': 'CP', 'Monto': 'Monto'})
         dac_cp_gen_breakdown['Monto'] = dac_cp_gen_breakdown['Monto'].round(2)
+        dac_cp_gen_breakdown = remove_excluded_cc(dac_cp_gen_breakdown, "CP")
 
         apm_detail_available = not apm_cp_gen_breakdown.empty
         dac_detail_available = not dac_cp_gen_breakdown.empty
@@ -426,6 +449,7 @@ if uploaded is not None:
         cp_gen_distribution = ensure_cp_distribution_frame(
             combine_cp_breakdowns(apm_cp_gen_breakdown, dac_cp_gen_breakdown)
         )
+        cp_gen_distribution = remove_excluded_cc(cp_gen_distribution, "CP")
 
     except Exception as e:
         st.warning(f"No se pudo procesar el Excel subido: {e}")
@@ -472,6 +496,7 @@ dac_share_filtered = add_share_columns(dac_gen_f, "DAC_2026")
 cp_gen_distribution = ensure_cp_distribution_frame(
     combine_cp_breakdowns(apm_cp_gen_breakdown, dac_cp_gen_breakdown)
 )
+cp_gen_distribution = remove_excluded_cc(cp_gen_distribution, "CP")
 
 with st.expander("💡 Insights automatizados", expanded=False):
     col_i1, col_i2 = st.columns(2)
@@ -711,9 +736,6 @@ with tab4:
         )
     with colB:
         dac_top = dac_cc.sort_values("Total_DAC", ascending=False).head(cc_top_n)
-        dac_h = px.bar(dac_top, x="Total_DAC", y="CC_T", orientation="h", hover_data={"Total_DAC":":,.0f"})
-        dac_h.update_layout(height=520, margin=dict(l=4,r=8,t=28,b=20), yaxis={"categoryorder":"total ascending"})
-        st.plotly_chart(dac_h, use_container_width=True)
         dac_top_share = dac_top['Total_DAC'].sum() / dac_cc['Total_DAC'].sum() * 100 if dac_cc['Total_DAC'].sum() else 0
         st.metric("Participación del Top seleccionado", f"{dac_top_share:.1f}%")
         dac_cc_table = build_share_table(dac_cc, dac_cc_totals, "CC_T", "Total_DAC", "TOTAL GENERAL")
@@ -823,4 +845,6 @@ with tab5:
         st.caption(
             "Escenario generado con un ritmo base de 2 a 3 millones mensuales y un repunte en diciembre, ajustado a las metas y avances configurados."
         )
+
+
         
