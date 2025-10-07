@@ -801,5 +801,4 @@ with tab5:
             "Escenario generado con un ritmo base de 2 a 3 millones mensuales y un repunte en diciembre, ajustado a las metas y avances configurados."
         )
 
-st.caption("Hecho con ❤️ en Streamlit + Plotly")
 
