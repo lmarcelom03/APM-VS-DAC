@@ -167,6 +167,25 @@ def combine_cp_breakdowns(apm_detail: pd.DataFrame, dac_detail: pd.DataFrame) ->
     return combined
 
 
+def ensure_cp_distribution_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Return ``df`` with required CP/genérica columns, or an empty skeleton."""
+    expected_cols = ["CP", "Genérica", "Tipo", "Monto"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=expected_cols)
+
+    cleaned = df.copy()
+    for col in expected_cols:
+        if col not in cleaned.columns:
+            cleaned[col] = "" if col != "Monto" else 0.0
+
+    cleaned = cleaned[expected_cols]
+    cleaned["Monto"] = pd.to_numeric(cleaned["Monto"], errors="coerce").fillna(0.0).round(2)
+    cleaned["CP"] = cleaned["CP"].astype(str)
+    cleaned["Genérica"] = cleaned["Genérica"].astype(str)
+    cleaned["Tipo"] = cleaned["Tipo"].astype(str)
+    return cleaned
+
+
 apm_gen, dac_gen, apm_cc, dac_cc = load_default()
 apm_gen["APM_2026"] = pd.to_numeric(apm_gen["APM_2026"], errors="coerce").round(2)
 dac_cols_default = [c for c in dac_gen.columns if isinstance(c, str) and "2026" in c]
@@ -404,6 +423,10 @@ if uploaded is not None:
         else:
             cp_breakdown_quality = "estimado"
 
+        cp_gen_distribution = ensure_cp_distribution_frame(
+            combine_cp_breakdowns(apm_cp_gen_breakdown, dac_cp_gen_breakdown)
+        )
+
     except Exception as e:
         st.warning(f"No se pudo procesar el Excel subido: {e}")
 
@@ -446,9 +469,9 @@ apm_share_full = add_share_columns(apm_gen, "APM_2026")
 dac_share_full = add_share_columns(dac_gen, "DAC_2026")
 apm_share_filtered = add_share_columns(apm_gen_f, "APM_2026")
 dac_share_filtered = add_share_columns(dac_gen_f, "DAC_2026")
-cp_gen_distribution = combine_cp_breakdowns(apm_cp_gen_breakdown, dac_cp_gen_breakdown)
-if not cp_gen_distribution.empty():
-    cp_gen_distribution["Monto"] = cp_gen_distribution["Monto"].round(2)
+cp_gen_distribution = ensure_cp_distribution_frame(
+    combine_cp_breakdowns(apm_cp_gen_breakdown, dac_cp_gen_breakdown)
+)
 
 with st.expander("💡 Insights automatizados", expanded=False):
     col_i1, col_i2 = st.columns(2)
@@ -800,5 +823,4 @@ with tab5:
         st.caption(
             "Escenario generado con un ritmo base de 2 a 3 millones mensuales y un repunte en diciembre, ajustado a las metas y avances configurados."
         )
-
-
+        
