@@ -29,7 +29,27 @@ def load_default():
     dac_cc  = pd.read_csv(DATA_DIR/"dac_cc_2026.csv")
     return apm_gen, dac_gen, apm_cc, dac_cc
 
+
+def split_total_rows(df: pd.DataFrame, label_col: str):
+    """Return dataframe without rows whose label is a total (case-insensitive)."""
+    label_series = (
+        df[label_col]
+        .astype(str)
+        .str.normalize("NFKD")
+        .str.encode("ascii", "ignore")
+        .str.decode("ascii")
+        .str.strip()
+        .str.upper()
+    )
+    total_mask = label_series.str.startswith("TOTAL")
+    return df.loc[~total_mask].copy(), df.loc[total_mask].copy()
+
+
 apm_gen, dac_gen, apm_cc, dac_cc = load_default()
+apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
+dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
+apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
+dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
 # Optional: allow user to upload a fresh Excel and recompute basic summaries
 uploaded = st.file_uploader("Sube el Excel original para recalcular (opcional)", type=["xlsx"], accept_multiple_files=False)
@@ -57,6 +77,8 @@ if uploaded is not None:
         dac_gen = res_da_raw.loc[start_idx:end_idx-1, ['Unnamed: 10','Unnamed: 11']].copy()
         dac_gen.columns = ['Genérica','DAC_2026']
         dac_gen['DAC_2026'] = pd.to_numeric(dac_gen['DAC_2026'], errors='coerce')
+        apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
+        dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
 
         apmgg = xl.parse("APM-GG")
         header_idx = 3
@@ -69,6 +91,7 @@ if uploaded is not None:
         if total_cols:
             apmgg2['Total_APM'] = apmgg2[total_cols].apply(pd.to_numeric, errors='coerce').sum(axis=1)
         apm_cc = apmgg2.dropna(subset=['CC_T'])[['CC_T','Total_APM']].dropna()
+        apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 
         da = xl.parse("Res_DA")
         header_idx_da = 3
@@ -82,9 +105,10 @@ if uploaded is not None:
         da2.rename(columns=rename_map_da, inplace=True)
         gen_cols_da = [c for c in da2.columns if isinstance(c, str) and (c.startswith('2.') or 'TOTAL' in c.upper())]
         for c in gen_cols_da:
-            da2[c] = pd.to_numeric(da2[c], errors='coerce')
+            da2[c] = pd.to_numeric(c, errors='coerce')
         total_col_da = next((c for c in gen_cols_da if 'TOTAL' in c.upper()), None)
         dac_cc = da2.dropna(subset=['CC_T'])[['CC_T', total_col_da]].rename(columns={total_col_da:'Total_DAC'}).dropna()
+        dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
     except Exception as e:
         st.warning(f"No se pudo procesar el Excel subido: {e}")
@@ -96,7 +120,7 @@ def fmt_money(x):
     except:
         return "-"
 
-apm_total = float(apm_gen.loc[apm_gen['Genérica']=='TOTAL','APM_2026'].values[0]) if 'TOTAL' in apm_gen['Genérica'].values else float(apm_gen['APM_2026'].sum())
+apm_total = float(apm_gen['APM_2026'].sum())
 dac_total = float(dac_gen['DAC_2026'].sum())
 
 k1, k2, k3 = st.columns([1,1,1])
@@ -106,7 +130,7 @@ with k2:
     st.markdown('<div class="kpi-card"><div class="kpi-label">DAC 2026</div><div class="kpi-value">'+fmt_money(dac_total)+'</div></div>', unsafe_allow_html=True)
 with k3:
     share_apm = apm_total/(apm_total+dac_total) if (apm_total+dac_total)>0 else 0
-    st.markdown('<div class="kpi-card"><div class="kpi-label">% APM en Total 2026</div><div class="kpi-value">'+f"{share_apm*100:.1f}%"+"</div></div>", unsafe_allow_html=True)
+    st.markdown('<div class="kpi-card"><div class="kpi-label">% APM en Total 2026</div><div class="kpi-value">'+f"{share_apm*100:.1f}%"+'</div></div>', unsafe_allow_html=True)
 
 st.write("")
 
@@ -150,7 +174,8 @@ with tab2:
     )
     apm_plot.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4,r=8,t=28,b=60))
     st.plotly_chart(apm_plot, use_container_width=True)
-    st.dataframe(apm_gen, use_container_width=True)
+    apm_display = pd.concat([apm_gen, apm_gen_totals], ignore_index=True) if not apm_gen_totals.empty else apm_gen
+    st.dataframe(apm_display, use_container_width=True)
 
 with tab3:
     dac_plot = px.bar(
@@ -161,7 +186,8 @@ with tab3:
     )
     dac_plot.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4,r=8,t=28,b=60))
     st.plotly_chart(dac_plot, use_container_width=True)
-    st.dataframe(dac_gen, use_container_width=True)
+    dac_display = pd.concat([dac_gen, dac_gen_totals], ignore_index=True) if not dac_gen_totals.empty else dac_gen
+    st.dataframe(dac_display, use_container_width=True)
 
 with tab4:
     comp = apm_gen_f[apm_gen_f['Genérica']!='TOTAL'].merge(dac_gen_f, on="Genérica", how="outer").fillna(0)
