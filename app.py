@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+import numpy as np
 
 st.set_page_config(page_title="APM & DAC 2026 — Peru Compras", page_icon="📊", layout="wide")
 
@@ -51,25 +52,6 @@ def split_total_rows(df: pd.DataFrame, label_col: str):
     )
     total_mask = label_series.str.startswith("TOTAL")
     return df.loc[~total_mask].copy(), df.loc[total_mask].copy()
-
-
-apm_gen, dac_gen, apm_cc, dac_cc = load_default()
-apm_gen["APM_2026"] = pd.to_numeric(apm_gen["APM_2026"], errors="coerce").round(2)
-dac_cols_default = [c for c in dac_gen.columns if isinstance(c, str) and '2026' in c]
-dac_numeric_default = dac_gen[dac_cols_default].apply(pd.to_numeric, errors="coerce")
-dac_gen = pd.DataFrame({
-    "Genérica": dac_gen["Genérica"],
-    "DAC_2026": dac_numeric_default.sum(axis=1).round(2)
-})
-apm_cc["Total_APM"] = pd.to_numeric(apm_cc["Total_APM"], errors="coerce").round(2)
-dac_cc["Total_DAC"] = pd.to_numeric(dac_cc["Total_DAC"], errors="coerce").round(2)
-
-apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
-dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
-apm_cc = normalize_cc_labels(apm_cc, "CC_T")
-dac_cc = normalize_cc_labels(dac_cc, "CC_T")
-apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
-dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
 
 def build_display_table(main_df: pd.DataFrame, totals_df: pd.DataFrame, label_col: str, value_col: str, total_label: str):
@@ -128,6 +110,178 @@ def describe_top_segments(df: pd.DataFrame, value_col: str, label_col: str, top_
     top_share = top['Participación %'].sum()
     return "\n".join(top_lines + [f"Los {top_n} primeros concentran el {top_share:.1f}% del total."])
 
+
+def estimate_cp_generica_distribution(
+    cp_df: pd.DataFrame,
+    cp_col: str,
+    total_col: str,
+    gen_df: pd.DataFrame,
+    label_col: str,
+    value_col: str,
+) -> pd.DataFrame:
+    """Estimate the breakdown of each cost center across generics using current shares."""
+    if cp_df.empty or gen_df.empty:
+        return pd.DataFrame(columns=["CP", "Genérica", "Monto"])
+
+    share_df = gen_df[[label_col, value_col]].copy()
+    total_value = share_df[value_col].sum()
+    if total_value <= 0:
+        return pd.DataFrame(columns=["CP", "Genérica", "Monto"])
+
+    share_df["_peso"] = share_df[value_col] / total_value
+    cp_rows = cp_df[[cp_col, total_col]].dropna()
+
+    records = []
+    for cp_val, total_cp in cp_rows.values:
+        if pd.isna(total_cp):
+            continue
+        for _, gen_row in share_df.iterrows():
+            records.append(
+                {
+                    "CP": cp_val,
+                    "Genérica": gen_row[label_col],
+                    "Monto": float(total_cp) * float(gen_row["_peso"]),
+                }
+            )
+
+    return pd.DataFrame(records)
+
+
+def combine_cp_breakdowns(apm_detail: pd.DataFrame, dac_detail: pd.DataFrame) -> pd.DataFrame:
+    """Merge APM and DAC cost-center breakdowns into a unified table."""
+    frames = []
+    if apm_detail is not None and not apm_detail.empty:
+        apm_tmp = apm_detail.copy()
+        apm_tmp["Tipo"] = "APM"
+        frames.append(apm_tmp)
+    if dac_detail is not None and not dac_detail.empty:
+        dac_tmp = dac_detail.copy()
+        dac_tmp["Tipo"] = "DAC 2026"
+        frames.append(dac_tmp)
+    if not frames:
+        return pd.DataFrame(columns=["CP", "Genérica", "Tipo", "Monto"])
+    combined = pd.concat(frames, ignore_index=True)
+    combined["Monto"] = pd.to_numeric(combined["Monto"], errors="coerce").fillna(0.0)
+    combined["CP"] = combined["CP"].astype(str)
+    combined["Genérica"] = combined["Genérica"].astype(str)
+    return combined
+
+
+apm_gen, dac_gen, apm_cc, dac_cc = load_default()
+apm_gen["APM_2026"] = pd.to_numeric(apm_gen["APM_2026"], errors="coerce").round(2)
+dac_cols_default = [c for c in dac_gen.columns if isinstance(c, str) and "2026" in c]
+dac_numeric_default = dac_gen[dac_cols_default].apply(pd.to_numeric, errors="coerce")
+dac_gen = pd.DataFrame(
+    {
+        "Genérica": dac_gen["Genérica"],
+        "DAC_2026": dac_numeric_default.sum(axis=1).round(2),
+    }
+)
+apm_cc["Total_APM"] = pd.to_numeric(apm_cc["Total_APM"], errors="coerce").round(2)
+dac_cc["Total_DAC"] = pd.to_numeric(dac_cc["Total_DAC"], errors="coerce").round(2)
+
+apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
+dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
+apm_cc = normalize_cc_labels(apm_cc, "CC_T")
+dac_cc = normalize_cc_labels(dac_cc, "CC_T")
+apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
+dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
+
+apm_cp_gen_breakdown = estimate_cp_generica_distribution(
+    apm_cc, "CC_T", "Total_APM", apm_gen, "Genérica", "APM_2026"
+)
+if not apm_cp_gen_breakdown.empty:
+    apm_cp_gen_breakdown["Monto"] = apm_cp_gen_breakdown["Monto"].round(2)
+
+dac_cp_gen_breakdown = estimate_cp_generica_distribution(
+    dac_cc, "CC_T", "Total_DAC", dac_gen, "Genérica", "DAC_2026"
+)
+if not dac_cp_gen_breakdown.empty:
+    dac_cp_gen_breakdown["Monto"] = dac_cp_gen_breakdown["Monto"].round(2)
+
+cp_breakdown_quality = "estimado"
+
+
+MONTH_NAMES = [
+    "Ene",
+    "Feb",
+    "Mar",
+    "Abr",
+    "May",
+    "Jun",
+    "Jul",
+    "Ago",
+    "Set",
+    "Oct",
+    "Nov",
+    "Dic",
+]
+
+
+def build_monthly_profile(meta_total: float) -> np.ndarray:
+    """Create a smooth profile that grows through the year with a December boost."""
+    base_months = np.linspace(2.1, 3.0, 11) * 1_000_000
+    december_value = 3.2 * 1_000_000
+    profile = np.concatenate([base_months, [december_value]])
+    profile_sum = profile.sum()
+    if meta_total > 0 and profile_sum > 0:
+        scale = meta_total / profile_sum
+        profile = profile * scale
+    return profile
+
+
+def build_execution_animation(meta_total: float, avance_total: float, months_elapsed: int):
+    """Return dataframes for the animated execution simulation clip."""
+    months_elapsed = max(1, min(12, int(months_elapsed)))
+    profile = build_monthly_profile(meta_total)
+
+    projected_monthly = profile
+    projected_cumulative = np.cumsum(projected_monthly)
+
+    historical_profile = projected_monthly[:months_elapsed].copy()
+    hist_sum = historical_profile.sum()
+    if avance_total > 0 and hist_sum > 0:
+        historical_profile = historical_profile * (avance_total / hist_sum)
+    else:
+        historical_profile = np.zeros(months_elapsed)
+
+    actual_monthly = np.concatenate([historical_profile, np.zeros(12 - months_elapsed)])
+    actual_cumulative = np.cumsum(actual_monthly)
+
+    # Keep execution flat after the last recorded month
+    if months_elapsed < 12 and avance_total > 0:
+        actual_cumulative[months_elapsed - 1 :] = avance_total
+
+    frames = []
+    for idx, month in enumerate(MONTH_NAMES):
+        frame_label = f"{idx+1:02d} - {month}"
+        for serie, cumulative in (
+            ("Proyección anual", projected_cumulative),
+            ("Ejecución simulada", actual_cumulative),
+        ):
+            for month_idx in range(idx + 1):
+                frames.append(
+                    {
+                        "Frame": frame_label,
+                        "Mes": MONTH_NAMES[month_idx],
+                        "Serie": serie,
+                        "Monto acumulado": float(cumulative[month_idx]),
+                    }
+                )
+
+    animation_df = pd.DataFrame(frames)
+    table_df = pd.DataFrame(
+        {
+            "Mes": MONTH_NAMES,
+            "Escenario proyectado (S/)": projected_monthly.round(2),
+            "Proyección acumulada (S/)": projected_cumulative.round(2),
+            "Ejecución simulada (S/)": actual_monthly.round(2),
+            "Ejecución acumulada (S/)": actual_cumulative.round(2),
+        }
+    )
+
+    return animation_df, table_df
+
 # Optional: allow user to upload a fresh Excel and recompute basic summaries
 uploaded = st.file_uploader("Sube el Excel original para recalcular (opcional)", type=["xlsx"], accept_multiple_files=False)
 if uploaded is not None:
@@ -177,6 +331,24 @@ if uploaded is not None:
         apm_cc = normalize_cc_labels(apm_cc, "CC_T")
         apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 
+        apm_detail_base = apmgg2.dropna(subset=['CC_T']).copy()
+        apm_detail_base = normalize_cc_labels(apm_detail_base, "CC_T")
+        detail_cols_apm = [
+            c
+            for c in apm_detail_base.columns
+            if isinstance(c, str)
+            and c not in {"programa2", "CC_T", "Total_APM"}
+            and "total" not in c.lower()
+        ]
+        apm_detail_long = apm_detail_base[['CC_T'] + detail_cols_apm].melt(
+            id_vars='CC_T', value_vars=detail_cols_apm, var_name='Genérica', value_name='Monto'
+        )
+        apm_detail_long['Monto'] = pd.to_numeric(apm_detail_long['Monto'], errors='coerce')
+        apm_detail_long = apm_detail_long.dropna(subset=['Monto'])
+        apm_detail_long, _ = split_total_rows(apm_detail_long, 'Genérica')
+        apm_cp_gen_breakdown = apm_detail_long.rename(columns={'CC_T': 'CP', 'Monto': 'Monto'})
+        apm_cp_gen_breakdown['Monto'] = apm_cp_gen_breakdown['Monto'].round(2)
+
         da = xl.parse("Res_DA")
         header_idx_da = 3
         headers_da = da.iloc[header_idx_da, 2:].tolist()
@@ -195,6 +367,42 @@ if uploaded is not None:
         dac_cc['Total_DAC'] = dac_cc['Total_DAC'].round(2)
         dac_cc = normalize_cc_labels(dac_cc, "CC_T")
         dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
+
+        dac_detail_base = da2.dropna(subset=['CC_T']).copy()
+        dac_detail_base = normalize_cc_labels(dac_detail_base, "CC_T")
+        detail_cols_dac = [c for c in gen_cols_da if 'TOTAL' not in c.upper()]
+        dac_detail_long = dac_detail_base[['CC_T'] + detail_cols_dac].melt(
+            id_vars='CC_T', value_vars=detail_cols_dac, var_name='Genérica', value_name='Monto'
+        )
+        dac_detail_long['Monto'] = pd.to_numeric(dac_detail_long['Monto'], errors='coerce')
+        dac_detail_long = dac_detail_long.dropna(subset=['Monto'])
+        dac_detail_long, _ = split_total_rows(dac_detail_long, 'Genérica')
+        dac_cp_gen_breakdown = dac_detail_long.rename(columns={'CC_T': 'CP', 'Monto': 'Monto'})
+        dac_cp_gen_breakdown['Monto'] = dac_cp_gen_breakdown['Monto'].round(2)
+
+        apm_detail_available = not apm_cp_gen_breakdown.empty
+        dac_detail_available = not dac_cp_gen_breakdown.empty
+
+        if not apm_detail_available:
+            apm_cp_gen_breakdown = estimate_cp_generica_distribution(
+                apm_cc, "CC_T", "Total_APM", apm_gen, "Genérica", "APM_2026"
+            )
+            if not apm_cp_gen_breakdown.empty:
+                apm_cp_gen_breakdown["Monto"] = apm_cp_gen_breakdown["Monto"].round(2)
+
+        if not dac_detail_available:
+            dac_cp_gen_breakdown = estimate_cp_generica_distribution(
+                dac_cc, "CC_T", "Total_DAC", dac_gen, "Genérica", "DAC_2026"
+            )
+            if not dac_cp_gen_breakdown.empty:
+                dac_cp_gen_breakdown["Monto"] = dac_cp_gen_breakdown["Monto"].round(2)
+
+        if apm_detail_available and dac_detail_available:
+            cp_breakdown_quality = "real"
+        elif apm_detail_available or dac_detail_available:
+            cp_breakdown_quality = "mixto"
+        else:
+            cp_breakdown_quality = "estimado"
 
     except Exception as e:
         st.warning(f"No se pudo procesar el Excel subido: {e}")
@@ -238,6 +446,9 @@ apm_share_full = add_share_columns(apm_gen, "APM_2026")
 dac_share_full = add_share_columns(dac_gen, "DAC_2026")
 apm_share_filtered = add_share_columns(apm_gen_f, "APM_2026")
 dac_share_filtered = add_share_columns(dac_gen_f, "DAC_2026")
+cp_gen_distribution = combine_cp_breakdowns(apm_cp_gen_breakdown, dac_cp_gen_breakdown)
+if not cp_gen_distribution.empty():
+    cp_gen_distribution["Monto"] = cp_gen_distribution["Monto"].round(2)
 
 with st.expander("💡 Insights automatizados", expanded=False):
     col_i1, col_i2 = st.columns(2)
@@ -249,7 +460,7 @@ with st.expander("💡 Insights automatizados", expanded=False):
         st.markdown(describe_top_segments(dac_gen, "DAC_2026", "Genérica"))
 
 # ---------- TABS ----------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📌 Resumen", "🟥 APM + DAC", "⚖️ Comparativo", "🏢 Centros de Costo", "🎯 Seguimiento de metas"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📌 Resumen", "🟥 APM + DAC", "🧭 CP & Genéricas", "🏢 Centros de Costo", "🎯 Seguimiento de metas"])
 
 with tab1:
     # Donut APM vs DAC
@@ -406,39 +617,57 @@ with tab2:
             )
 
 with tab3:
-    comp = apm_gen_f[apm_gen_f['Genérica']!='TOTAL'].merge(dac_gen_f, on="Genérica", how="outer").fillna(0)
-    comp_m = comp.melt(id_vars="Genérica", value_vars=["APM_2026","DAC_2026"], var_name="Tipo", value_name="Soles")
-    comp_plot = px.bar(comp_m, x="Genérica", y="Soles", color="Tipo", barmode="group",
-                       hover_data={"Soles":":,.0f"})
-    comp_plot.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4,r=8,t=28,b=60))
-    st.plotly_chart(comp_plot, use_container_width=True)
+    st.markdown("### Distribución por CP y genéricas complementarias")
+    cp_filtered = cp_gen_distribution.copy()
+    if gen_filter:
+        cp_filtered = cp_filtered[cp_filtered['Genérica'].isin(gen_filter)]
 
-    comp['Brecha APM-DAC'] = (comp['APM_2026'] - comp['DAC_2026']).round(2)
-    comp['Lidera'] = comp.apply(
-        lambda row: 'APM' if row['Brecha APM-DAC'] > 0 else ('DAC' if row['Brecha APM-DAC'] < 0 else 'Empate'),
-        axis=1
-    )
-    gap_chart = px.bar(
-        comp.sort_values('Brecha APM-DAC', ascending=False),
-        x='Genérica',
-        y='Brecha APM-DAC',
-        color='Lidera',
-        color_discrete_map={'APM': '#d62728', 'DAC': '#1f77b4', 'Empate': '#888888'},
-        hover_data={
-            'Brecha APM-DAC': ':,.0f',
-            'APM_2026': ':,.0f',
-            'DAC_2026': ':,.0f'
-        },
-        labels={'Brecha APM-DAC': 'Brecha (S/)'},
-    )
-    gap_chart.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4, r=8, t=28, b=60))
-    st.plotly_chart(gap_chart, use_container_width=True)
+    if cp_filtered.empty:
+        st.info("No hay información disponible con los filtros seleccionados.")
+    else:
+        cp_filtered['Monto'] = cp_filtered['Monto'].round(2)
+        cp_filtered.sort_values(['CP', 'Genérica', 'Tipo'], inplace=True)
 
-    comp_table = comp[['Genérica', 'APM_2026', 'DAC_2026', 'Brecha APM-DAC', 'Lidera']].rename(columns={
-        'APM_2026': 'APM 2026 (S/)',
-        'DAC_2026': 'DAC 2026 (S/)',
-    })
-    st.dataframe(comp_table, hide_index=True, use_container_width=True)
+        cp_sunburst = px.sunburst(
+            cp_filtered,
+            path=["CP", "Genérica", "Tipo"],
+            values="Monto",
+            color="Tipo",
+            color_discrete_map={"APM": "#d62728", "DAC 2026": "#1f77b4"},
+            hover_data={"Monto": ":,.0f"},
+        )
+        cp_sunburst.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=520)
+        st.plotly_chart(cp_sunburst, use_container_width=True)
+
+        cp_summary = cp_filtered.groupby(["CP", "Tipo"], as_index=False)["Monto"].sum()
+        cp_stack = px.bar(
+            cp_summary,
+            x="CP",
+            y="Monto",
+            color="Tipo",
+            barmode="stack",
+            hover_data={"Monto":":,.0f"},
+            labels={"Monto": "Soles"},
+        )
+        cp_stack.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4, r=8, t=28, b=60))
+        st.plotly_chart(cp_stack, use_container_width=True)
+
+        cp_totals = cp_summary.groupby("CP", as_index=False)["Monto"].sum().rename(columns={"Monto": "Total"})
+        if not cp_totals.empty:
+            cp_totals["Participación %"] = (cp_totals["Total"] / cp_totals["Total"].sum() * 100).round(2)
+        cp_totals.sort_values("Total", ascending=False, inplace=True)
+        st.dataframe(
+            cp_totals.rename(columns={"Total": "Total (S/)"}),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    if cp_breakdown_quality == "real":
+        st.caption("Detalle real por CP y genérica proveniente del archivo cargado.")
+    elif cp_breakdown_quality == "mixto":
+        st.caption("Detalle mixto: se usa información real disponible y estimaciones proporcionales para el componente faltante.")
+    else:
+        st.caption("Distribución estimada según la composición actual de genéricas. Sube el Excel para utilizar el detalle real por CP.")
 
 with tab4:
     colA, colB = st.columns(2)
@@ -532,4 +761,45 @@ with tab5:
         st.metric("Cumplimiento %", f"{dac_progress:.1f}%", delta=dac_delta)
         st.metric("Proyección anualizada", fmt_money(dac_projection))
         st.caption("Ajusta los controles para simular escenarios de avance y metas.")
+
+    st.markdown("### Simulación continua del avance consolidado APM + DAC")
+    total_meta = apm_meta + dac_meta
+    total_avance = apm_avance + dac_avance
+    sim_month_default = max(apm_meses, dac_meses)
+    sim_month = st.slider(
+        "Mes considerado en la simulación",
+        1,
+        12,
+        sim_month_default,
+        key="sim_meses_total",
+    )
+
+    animation_df, simulation_table = build_execution_animation(total_meta, total_avance, sim_month)
+    if animation_df.empty:
+        st.info("No fue posible generar la simulación con los datos actuales.")
+    else:
+        y_max = max(
+            simulation_table["Proyección acumulada (S/)"].max(),
+            simulation_table["Ejecución acumulada (S/)"].max(),
+            1.0,
+        )
+        sim_fig = px.line(
+            animation_df,
+            x="Mes",
+            y="Monto acumulado",
+            color="Serie",
+            animation_frame="Frame",
+            markers=True,
+            range_y=[0, y_max * 1.05],
+            hover_data={"Monto acumulado": ":,.0f"},
+        )
+        sim_fig.update_layout(margin=dict(l=4, r=8, t=40, b=10))
+        st.plotly_chart(sim_fig, use_container_width=True)
+
+        st.dataframe(simulation_table, use_container_width=True, hide_index=True)
+        st.caption(
+            "Escenario generado con un ritmo base de 2 a 3 millones mensuales y un repunte en diciembre, ajustado a las metas y avances configurados."
+        )
+
+st.caption("Hecho con ❤️ en Streamlit + Plotly")
 
