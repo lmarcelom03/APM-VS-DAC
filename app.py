@@ -1,4 +1,3 @@
-\
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -30,6 +29,15 @@ def load_default():
     return apm_gen, dac_gen, apm_cc, dac_cc
 
 
+def normalize_cc_labels(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Apply known fixes to cost center labels so dashboards stay consistent."""
+    replacements = {
+        "0016-OA-COVID": "0016-DE (PROMOCION)",
+    }
+    df[column] = df[column].replace(replacements)
+    return df
+
+
 def split_total_rows(df: pd.DataFrame, label_col: str):
     """Return dataframe without rows whose label is a total (case-insensitive)."""
     label_series = (
@@ -53,6 +61,8 @@ dac_cc["Total_DAC"] = pd.to_numeric(dac_cc["Total_DAC"], errors="coerce").round(
 
 apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
 dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
+apm_cc = normalize_cc_labels(apm_cc, "CC_T")
+dac_cc = normalize_cc_labels(dac_cc, "CC_T")
 apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
@@ -109,6 +119,7 @@ if uploaded is not None:
             apmgg2['Total_APM'] = apmgg2[total_cols].apply(pd.to_numeric, errors='coerce').sum(axis=1)
         apm_cc = apmgg2.dropna(subset=['CC_T'])[['CC_T','Total_APM']].dropna()
         apm_cc['Total_APM'] = apm_cc['Total_APM'].round(2)
+        apm_cc = normalize_cc_labels(apm_cc, "CC_T")
         apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 
         da = xl.parse("Res_DA")
@@ -127,6 +138,7 @@ if uploaded is not None:
         total_col_da = next((c for c in gen_cols_da if 'TOTAL' in c.upper()), None)
         dac_cc = da2.dropna(subset=['CC_T'])[['CC_T', total_col_da]].rename(columns={total_col_da:'Total_DAC'}).dropna()
         dac_cc['Total_DAC'] = dac_cc['Total_DAC'].round(2)
+        dac_cc = normalize_cc_labels(dac_cc, "CC_T")
         dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
     except Exception as e:
