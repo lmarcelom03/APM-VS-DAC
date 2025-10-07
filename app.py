@@ -23,7 +23,7 @@ DATA_DIR = Path("data")
 
 @st.cache_data(show_spinner=False)
 def load_default():
-    apm_gen = pd.read_csv(DATA_DIR/"apm_generica_2026.csv")
+    apm_gen = pd.read_csv(DATA_DIR/"clean_res_apm_gg_generica.csv")
     dac_gen = pd.read_csv(DATA_DIR/"dac_generica_2026.csv")
     apm_cc  = pd.read_csv(DATA_DIR/"apm_cc_2026.csv")
     dac_cc  = pd.read_csv(DATA_DIR/"dac_cc_2026.csv")
@@ -46,10 +46,26 @@ def split_total_rows(df: pd.DataFrame, label_col: str):
 
 
 apm_gen, dac_gen, apm_cc, dac_cc = load_default()
+apm_gen["APM_2026"] = pd.to_numeric(apm_gen["APM_2026"], errors="coerce").round(2)
+dac_gen["DAC_2026"] = pd.to_numeric(dac_gen["DAC_2026"], errors="coerce").round(2)
+apm_cc["Total_APM"] = pd.to_numeric(apm_cc["Total_APM"], errors="coerce").round(2)
+dac_cc["Total_DAC"] = pd.to_numeric(dac_cc["Total_DAC"], errors="coerce").round(2)
+
 apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
 dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
 apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
+
+
+def build_display_table(main_df: pd.DataFrame, totals_df: pd.DataFrame, label_col: str, value_col: str, total_label: str):
+    """Combine main data with totals, generating a synthetic total row if necessary."""
+    if totals_df is not None and not totals_df.empty:
+        totals_copy = totals_df.copy()
+        totals_copy[value_col] = pd.to_numeric(totals_copy[value_col], errors="coerce").round(2)
+        return pd.concat([main_df, totals_copy], ignore_index=True)
+    synthetic_total = pd.DataFrame({label_col: [total_label], value_col: [main_df[value_col].sum()]})
+    synthetic_total[value_col] = synthetic_total[value_col].round(2)
+    return pd.concat([main_df, synthetic_total], ignore_index=True)
 
 # Optional: allow user to upload a fresh Excel and recompute basic summaries
 uploaded = st.file_uploader("Sube el Excel original para recalcular (opcional)", type=["xlsx"], accept_multiple_files=False)
@@ -70,13 +86,14 @@ if uploaded is not None:
             apm_work[c] = pd.to_numeric(apm_work[c], errors='coerce')
         apm_gen = apm_work.dropna(subset=gen_cols_apm, how='all')[gen_cols_apm].sum(numeric_only=True).reset_index()
         apm_gen.columns = ['Genérica','APM_2026']
+        apm_gen['APM_2026'] = apm_gen['APM_2026'].round(2)
 
         res_da_raw = xl.parse("RES_DA_GG")
         start_idx = res_da_raw.index[res_da_raw['Unnamed: 10'] == 'GENÉRICAS DE GASTO'][0] + 1
         end_idx = res_da_raw.index[res_da_raw['Unnamed: 10'] == 'TOTAL'][0]
         dac_gen = res_da_raw.loc[start_idx:end_idx-1, ['Unnamed: 10','Unnamed: 11']].copy()
         dac_gen.columns = ['Genérica','DAC_2026']
-        dac_gen['DAC_2026'] = pd.to_numeric(dac_gen['DAC_2026'], errors='coerce')
+        dac_gen['DAC_2026'] = pd.to_numeric(dac_gen['DAC_2026'], errors='coerce').round(2)
         apm_gen, apm_gen_totals = split_total_rows(apm_gen, "Genérica")
         dac_gen, dac_gen_totals = split_total_rows(dac_gen, "Genérica")
 
@@ -91,6 +108,7 @@ if uploaded is not None:
         if total_cols:
             apmgg2['Total_APM'] = apmgg2[total_cols].apply(pd.to_numeric, errors='coerce').sum(axis=1)
         apm_cc = apmgg2.dropna(subset=['CC_T'])[['CC_T','Total_APM']].dropna()
+        apm_cc['Total_APM'] = apm_cc['Total_APM'].round(2)
         apm_cc, apm_cc_totals = split_total_rows(apm_cc, "CC_T")
 
         da = xl.parse("Res_DA")
@@ -105,9 +123,10 @@ if uploaded is not None:
         da2.rename(columns=rename_map_da, inplace=True)
         gen_cols_da = [c for c in da2.columns if isinstance(c, str) and (c.startswith('2.') or 'TOTAL' in c.upper())]
         for c in gen_cols_da:
-            da2[c] = pd.to_numeric(c, errors='coerce')
+            da2[c] = pd.to_numeric(da2[c], errors='coerce')
         total_col_da = next((c for c in gen_cols_da if 'TOTAL' in c.upper()), None)
         dac_cc = da2.dropna(subset=['CC_T'])[['CC_T', total_col_da]].rename(columns={total_col_da:'Total_DAC'}).dropna()
+        dac_cc['Total_DAC'] = dac_cc['Total_DAC'].round(2)
         dac_cc, dac_cc_totals = split_total_rows(dac_cc, "CC_T")
 
     except Exception as e:
@@ -174,7 +193,7 @@ with tab2:
     )
     apm_plot.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4,r=8,t=28,b=60))
     st.plotly_chart(apm_plot, use_container_width=True)
-    apm_display = pd.concat([apm_gen, apm_gen_totals], ignore_index=True) if not apm_gen_totals.empty else apm_gen
+    apm_display = build_display_table(apm_gen, apm_gen_totals, "Genérica", "APM_2026", "TOTAL GENERAL")
     st.dataframe(apm_display, use_container_width=True)
 
 with tab3:
@@ -186,7 +205,7 @@ with tab3:
     )
     dac_plot.update_layout(height=520, xaxis_tickangle=-30, margin=dict(l=4,r=8,t=28,b=60))
     st.plotly_chart(dac_plot, use_container_width=True)
-    dac_display = pd.concat([dac_gen, dac_gen_totals], ignore_index=True) if not dac_gen_totals.empty else dac_gen
+    dac_display = build_display_table(dac_gen, dac_gen_totals, "Genérica", "DAC_2026", "TOTAL GENERAL")
     st.dataframe(dac_display, use_container_width=True)
 
 with tab4:
