@@ -16,6 +16,13 @@
   margin-bottom: 8px;
 }
 
+div[data-testid="stMetric"] {
+  background: rgba(31, 41, 55, 0.9);
+  border-radius: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
 .kpi-value {
   font-size: 28px;
   font-weight: 800;
@@ -25,6 +32,15 @@
 .kpi-label {
   font-size: 12px;
   opacity: 0.85;
+}
+
+div[data-testid="stMetricValue"],
+div[data-testid="stMetricLabel"] {
+  color: #FFFFFF !important;
+}
+
+div[data-testid="stMetricDelta"] span {
+  color: #FFFFFF !important;
 }
 
 /* Make tabs look pill-like */
